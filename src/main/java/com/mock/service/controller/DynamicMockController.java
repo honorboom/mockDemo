@@ -3,6 +3,7 @@ package com.mock.service.controller;
 import com.mock.service.entity.MockConfig;
 import com.mock.service.service.MockConfigService;
 import com.mock.service.service.MockHistoryService;
+import com.mock.service.service.ProtoService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,7 @@ import java.nio.charset.StandardCharsets;
  *   <li>动态路径匹配：根据请求路径和方法查找启用的Mock配置</li>
  *   <li>响应延迟模拟：支持配置延迟时间（毫秒）</li>
  *   <li>自定义响应状态码和Content-Type</li>
+ *   <li>支持 JSON 和 Protobuf 两种响应格式</li>
  *   <li>请求历史记录：异步保存每次调用的详细信息</li>
  * </ul>
  * </p>
@@ -40,6 +42,10 @@ import java.nio.charset.StandardCharsets;
  * // Mock配置: path="/users", method="POST", statusCode=201, delay=1000
  * POST http://localhost:8080/api/mock/users
  * -> 延迟1秒后返回responseBody
+ *
+ * // Mock配置: path="/proto/data", responseType="PROTOBUF"
+ * GET http://localhost:8080/api/mock/proto/data
+ * -> 返回protobuf二进制数据
  * </pre>
  * </p>
  *
@@ -48,6 +54,7 @@ import java.nio.charset.StandardCharsets;
  * @since 2024-01-01
  * @see MockConfigService
  * @see MockHistoryService
+ * @see ProtoService
  */
 @Slf4j
 @RestController
@@ -62,6 +69,9 @@ public class DynamicMockController {
     /** Mock历史服务，用于保存调用记录 */
     private final MockHistoryService mockHistoryService;
 
+    /** Proto服务，用于处理Protobuf格式响应 */
+    private final ProtoService protoService;
+
     /**
      * 处理所有Mock请求
      * <p>
@@ -71,26 +81,14 @@ public class DynamicMockController {
      *   <li>查找匹配的Mock配置（必须是启用状态）</li>
      *   <li>读取请求体内容</li>
      *   <li>应用配置的响应延迟</li>
-     *   <li>构建响应（状态码、Content-Type、响应体）</li>
+     *   <li>根据responseType构建响应（JSON或Protobuf）</li>
      *   <li>异步保存调用历史记录</li>
      *   <li>返回模拟响应</li>
      * </ol>
      * </p>
-     * <p>
-     * 路径匹配规则：
-     * <ul>
-     *   <li>请求: GET /api/mock/users -> 匹配path="/users", method="GET"</li>
-     *   <li>请求: POST /api/mock/api/v1/login -> 匹配path="/api/v1/login", method="POST"</li>
-     * </ul>
-     * </p>
      *
      * @param request HttpServletRequest对象，包含请求的所有信息
      * @return ResponseEntity 包含Mock配置的响应体、状态码和Content-Type
-     *         <ul>
-     *           <li>200-5xx: 返回Mock配置的状态码和响应体</li>
-     *           <li>404: 未找到匹配的Mock配置</li>
-     *           <li>500: 处理过程中发生异常</li>
-     *         </ul>
      */
     @RequestMapping(value = "/**", method = {
         RequestMethod.GET,
@@ -101,7 +99,7 @@ public class DynamicMockController {
         RequestMethod.OPTIONS,
         RequestMethod.HEAD
     })
-    public ResponseEntity<String> handleMockRequest(HttpServletRequest request) {
+    public ResponseEntity<?> handleMockRequest(HttpServletRequest request) {
         long startTime = System.currentTimeMillis();
 
         try {
@@ -141,7 +139,7 @@ public class DynamicMockController {
             // 计算响应时间
             long responseTime = System.currentTimeMillis() - startTime;
 
-            // 保存历史记录（异步）
+            // 保存历史记录（异步，记录原始 JSON 格式的 responseBody）
             try {
                 mockHistoryService.saveHistory(
                     mockConfig.getId(),
@@ -156,7 +154,12 @@ public class DynamicMockController {
                 log.error("保存历史记录失败", e);
             }
 
-            // 返回响应
+            // 根据响应类型返回不同格式
+            if ("PROTOBUF".equals(mockConfig.getResponseType())) {
+                return handleProtobufResponse(mockConfig, statusCode, responseBody);
+            }
+
+            // 默认 JSON/文本响应
             return ResponseEntity
                 .status(statusCode)
                 .contentType(MediaType.parseMediaType(contentType))
@@ -171,6 +174,42 @@ public class DynamicMockController {
             log.error("处理 Mock 请求失败", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body("{\"error\": \"" + e.getMessage() + "\"}");
+        }
+    }
+
+    /**
+     * 处理 Protobuf 格式响应
+     * <p>
+     * 将 MockConfig 中的 JSON 格式 responseBody 转换为 Protobuf 二进制数据返回。
+     * </p>
+     */
+    private ResponseEntity<?> handleProtobufResponse(MockConfig mockConfig, Integer statusCode, String responseBody) {
+        try {
+            if (mockConfig.getProtoFileId() == null || mockConfig.getProtoMessageType() == null) {
+                log.error("Protobuf 响应配置不完整: protoFileId={}, protoMessageType={}",
+                    mockConfig.getProtoFileId(), mockConfig.getProtoMessageType());
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("{\"error\": \"Protobuf 响应配置不完整，缺少 protoFileId 或 protoMessageType\"}");
+            }
+
+            byte[] protoBytes = protoService.jsonToProtobuf(
+                mockConfig.getProtoFileId(),
+                mockConfig.getProtoMessageType(),
+                responseBody
+            );
+
+            log.info("Protobuf 响应生成成功: messageType={}, 大小={} bytes",
+                mockConfig.getProtoMessageType(), protoBytes.length);
+
+            return ResponseEntity
+                .status(statusCode)
+                .contentType(MediaType.parseMediaType("application/x-protobuf"))
+                .body(protoBytes);
+
+        } catch (Exception e) {
+            log.error("生成 Protobuf 响应失败", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body("{\"error\": \"Protobuf 响应生成失败: " + e.getMessage() + "\"}");
         }
     }
 }

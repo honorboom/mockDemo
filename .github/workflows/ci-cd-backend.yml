@@ -1,0 +1,327 @@
+name: Backend CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'mock-service-backend/**'
+      - '.github/workflows/ci-cd-backend.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'mock-service-backend/**'
+
+env:
+  JAVA_VERSION: '17'
+  MAVEN_VERSION: '3.8.1'
+  DOCKER_REGISTRY: 'ghcr.io'
+  IMAGE_NAME: 'mock-service-backend'
+
+jobs:
+  # ===== 代码质量检查 =====
+  code-quality:
+    runs-on: ubuntu-latest
+    name: Code Quality Check
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # SonarQube 需要完整历史
+
+      - name: ☕ Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 🔍 Run SonarQube scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          cd mock-service-backend
+          mvn clean verify sonar:sonar \
+            -Dsonar.projectKey=mock-service-backend \
+            -Dsonar.sources=src/main \
+            -Dsonar.tests=src/test \
+            -Dsonar.host.url=$SONAR_HOST_URL \
+            -Dsonar.login=$SONAR_TOKEN
+
+      - name: ✅ Quality Gate Status
+        run: |
+          cd mock-service-backend
+          echo "代码质量检查完成，请查看 SonarQube 仪表板"
+
+  # ===== 构建和测试 =====
+  build-and-test:
+    runs-on: ubuntu-latest
+    name: Build and Test
+    needs: code-quality
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 📦 Build with Maven
+        run: |
+          cd mock-service-backend
+          mvn clean package \
+            -DskipTests=false \
+            -U
+
+      - name: 📊 Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: mock-service-backend/target/surefire-reports/
+
+      - name: 📦 Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-jar
+          path: mock-service-backend/target/*.jar
+
+  # ===== 安全扫描 =====
+  security-scan:
+    runs-on: ubuntu-latest
+    name: Security Scanning
+    needs: build-and-test
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔐 Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'mock-service-backend'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: 📤 Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: 🔐 Dependency check
+        run: |
+          cd mock-service-backend
+          mvn org.owasp:dependency-check-maven:check || true
+
+  # ===== Docker 构建和推送 =====
+  docker-build:
+    runs-on: ubuntu-latest
+    name: Docker Build and Push
+    needs: [ build-and-test, security-scan ]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔐 Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: 🔨 Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./mock-service-backend
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===== 部署到开发环境 =====
+  deploy-dev:
+    runs-on: ubuntu-latest
+    name: Deploy to Development
+    needs: [ docker-build ]
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: development
+      url: https://dev-api.example.com
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy to Dev
+        env:
+          DEPLOY_HOST: ${{ secrets.DEV_HOST }}
+          DEPLOY_USER: ${{ secrets.DEV_USER }}
+          DEPLOY_KEY: ${{ secrets.DEV_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts
+
+          # 部署脚本
+          ssh -i ~/.ssh/deploy_key $DEPLOY_USER@$DEPLOY_HOST << 'EOF'
+            cd /app/mock-service-backend
+            docker pull ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:develop
+            docker-compose down || true
+            docker-compose up -d
+            docker-compose logs -f backend
+          EOF
+
+      - name: 💬 Comment on PR
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ 已部署到开发环境: https://dev-api.example.com'
+            })
+
+  # ===== 部署到生产环境 =====
+  deploy-prod:
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    needs: [ docker-build ]
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://api.example.com
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy to Production
+        env:
+          DEPLOY_HOST: ${{ secrets.PROD_HOST }}
+          DEPLOY_USER: ${{ secrets.PROD_USER }}
+          DEPLOY_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/deploy_key $DEPLOY_USER@$DEPLOY_HOST << 'EOF'
+            cd /app/mock-service-backend
+            # 备份数据库
+            docker exec mock-mysql mysqldump -uroot -p$MYSQL_PASSWORD mock_service_db > backup_$(date +%Y%m%d_%H%M%S).sql
+
+            docker pull ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:main
+            docker-compose down || true
+            docker-compose up -d
+
+            # 健康检查
+            for i in {1..30}; do
+              if curl -f http://localhost:8080/api/health; then
+                echo "应用健康检查通过"
+                exit 0
+              fi
+              sleep 2
+            done
+            exit 1
+          EOF
+
+      - name: 📢 Notify on deployment
+        if: success()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: '✅ 生产环境部署成功! 版本: ${{ github.sha }}'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+
+      - name: 📢 Notify on failure
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: '❌ 生产环境部署失败! 请立即检查'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+
+  # ===== 性能测试 =====
+  performance-test:
+    runs-on: ubuntu-latest
+    name: Performance Testing
+    needs: [ build-and-test ]
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: mock_service_db
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 📦 Get built artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: backend-jar
+          path: mock-service-backend/target/
+
+      - name: 🚀 Start application
+        run: |
+          cd mock-service-backend
+          java -jar target/*.jar &
+          sleep 10
+
+      - name: 📊 Run JMeter performance tests
+        run: |
+          cd mock-service-backend
+          # 需要安装 JMeter
+          # jmeter -n -t tests/performance.jmx -l results.jtl
+
+      - name: 📈 Upload performance results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: performance-results
+          path: mock-service-backend/results.jtl

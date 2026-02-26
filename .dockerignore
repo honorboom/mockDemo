@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Maven
+target/
+.m2/
+
+# Logs
+logs/
+*.log
+
+# OS
+.classpath
+.project
+.settings
+*.iml
+*.iws
+*.ipr
+
+# Build
+node_modules/
+dist/
+build/
+
+# Data
+data/
+*.db
+
+# Documentation
+README.md
+QUICK_START.md

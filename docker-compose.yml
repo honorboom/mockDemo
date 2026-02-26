@@ -1,0 +1,76 @@
+services:
+  # Mock Service 应用（使用 H2 内存数据库）
+  mock-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mock-service-backend
+    environment:
+      SPRING_PROFILES_ACTIVE: h2
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_SHOW_SQL: false
+      LOGGING_LEVEL_COM_MOCK_SERVICE: DEBUG
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB: INFO
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    restart: unless-stopped
+
+# 可选：如果需要使用 MySQL，请取消注释以下配置
+# services:
+#   mysql:
+#     image: mysql:8.0
+#     container_name: mock-service-mysql
+#     environment:
+#       MYSQL_ROOT_PASSWORD: root123
+#       MYSQL_DATABASE: mock_service_db
+#       MYSQL_USER: mock_user
+#       MYSQL_PASSWORD: mock_password
+#       TZ: Asia/Shanghai
+#     ports:
+#       - "3306:3306"
+#     volumes:
+#       - mysql_data:/var/lib/mysql
+#       - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+#     networks:
+#       - mock-network
+#     healthcheck:
+#       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+#       interval: 10s
+#       timeout: 5s
+#       retries: 5
+#
+#   mock-service:
+#     build:
+#       context: .
+#       dockerfile: Dockerfile
+#     container_name: mock-service-backend
+#     environment:
+#       SPRING_PROFILES_ACTIVE: mysql
+#       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/mock_service_db?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+#       SPRING_DATASOURCE_USERNAME: mock_user
+#       SPRING_DATASOURCE_PASSWORD: mock_password
+#       SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+#       SPRING_JPA_HIBERNATE_DDL_AUTO: update
+#       SPRING_JPA_SHOW_SQL: false
+#       LOGGING_LEVEL_COM_MOCK_SERVICE: DEBUG
+#       LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB: INFO
+#     ports:
+#       - "8080:8080"
+#     depends_on:
+#       mysql:
+#         condition: service_healthy
+#     networks:
+#       - mock-network
+#     volumes:
+#       - ./logs:/app/logs
+#     restart: unless-stopped
+#
+# volumes:
+#   mysql_data:
+#
+# networks:
+#   mock-network:
+#     driver: bridge

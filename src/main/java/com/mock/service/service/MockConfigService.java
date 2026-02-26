@@ -72,6 +72,9 @@ public class MockConfigService {
         config.setDelay(request.getDelay());
         config.setEnabled(request.getEnabled());
         config.setDescription(request.getDescription());
+        config.setResponseType(request.getResponseType() != null ? request.getResponseType() : "JSON");
+        config.setProtoFileId(request.getProtoFileId());
+        config.setProtoMessageType(request.getProtoMessageType());
         return mockConfigRepository.save(config);
     }
 
@@ -117,9 +120,12 @@ public class MockConfigService {
         config.setDelay(request.getDelay());
         config.setEnabled(request.getEnabled());
         config.setDescription(request.getDescription());
+        config.setResponseType(request.getResponseType() != null ? request.getResponseType() : "JSON");
+        config.setProtoFileId(request.getProtoFileId());
+        config.setProtoMessageType(request.getProtoMessageType());
 
-        log.info("准备保存更新: name={}, path={}, method={}, statusCode={}, responseBody={}",
-            config.getName(), config.getPath(), config.getMethod(), config.getStatusCode(),
+        log.info("准备保存更新: name={}, path={}, method={}, statusCode={}, responseType={}, responseBody={}",
+            config.getName(), config.getPath(), config.getMethod(), config.getStatusCode(), config.getResponseType(),
             config.getResponseBody() != null ? config.getResponseBody().substring(0, Math.min(50, config.getResponseBody().length())) : "null");
 
         // 保存并刷新
@@ -284,6 +290,9 @@ public class MockConfigService {
                 config.setDelay(request.getDelay() != null ? request.getDelay() : 0);
                 config.setEnabled(request.getEnabled() != null ? request.getEnabled() : true);
                 config.setDescription(request.getDescription());
+                config.setResponseType(request.getResponseType() != null ? request.getResponseType() : "JSON");
+                config.setProtoFileId(request.getProtoFileId());
+                config.setProtoMessageType(request.getProtoMessageType());
 
                 MockConfig saved = mockConfigRepository.save(config);
                 configs.add(saved);

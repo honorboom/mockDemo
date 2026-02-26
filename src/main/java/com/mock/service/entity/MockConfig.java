@@ -197,6 +197,23 @@ public class MockConfig {
     private String description;
 
     /**
+     * 响应类型：JSON（默认）或 PROTOBUF
+     */
+    @Column(length = 20)
+    private String responseType = "JSON";
+
+    /**
+     * 关联的 Proto 文件 ID（仅 PROTOBUF 类型使用）
+     */
+    private Long protoFileId;
+
+    /**
+     * Proto message 类型名称（如 "MyResponse"，仅 PROTOBUF 类型使用）
+     */
+    @Column(length = 200)
+    private String protoMessageType;
+
+    /**
      * 创建时间
      * <p>
      * 记录自动创建时间，由Hibernate的@CreationTimestamp注解自动管理。

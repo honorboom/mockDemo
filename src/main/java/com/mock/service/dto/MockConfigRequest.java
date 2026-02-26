@@ -33,4 +33,13 @@ public class MockConfigRequest {
     private Boolean enabled = true;
 
     private String description;
+
+    /** 响应类型：JSON（默认）或 PROTOBUF */
+    private String responseType = "JSON";
+
+    /** 关联的 Proto 文件 ID（仅 PROTOBUF 类型使用） */
+    private Long protoFileId;
+
+    /** Proto message 类型名称（仅 PROTOBUF 类型使用） */
+    private String protoMessageType;
 }
